@@ -1,0 +1,1 @@
+I'm using this to contribute into the stock analysis with my co-worker.
