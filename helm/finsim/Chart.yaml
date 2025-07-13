@@ -1,0 +1,30 @@
+apiVersion: v2
+name: finsim
+description: A Helm chart for FinSim financial simulation platform
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/r3tr056/finsim
+sources:
+  - https://github.com/r3tr056/finsim
+maintainers:
+  - name: FinSim Team
+    email: team@finsim.com
+keywords:
+  - financial
+  - simulation
+  - trading
+  - microservices
+dependencies:
+  - name: postgresql
+    version: 12.12.10
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: 18.1.5
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: kafka
+    version: 25.3.5
+    repository: https://charts.bitnami.com/bitnami
+    condition: kafka.enabled

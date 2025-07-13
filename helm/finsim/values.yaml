@@ -1,0 +1,245 @@
+# Default values for finsim
+replicaCount: 1
+
+image:
+  registry: docker.io
+  repository: finsim
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Services configuration
+services:
+  marketData:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/market-data
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+  simulationEngine:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/simulation-engine
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+
+  agents:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/agents
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+
+  riskAnalytics:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/risk-analytics
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+
+  portfolio:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/portfolio
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+
+  authService:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/auth-service
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+  dashboard:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: finsim/dashboard
+      tag: "latest"
+    service:
+      type: ClusterIP
+      port: 3000
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+# API Gateway (Kong)
+kong:
+  enabled: true
+  image:
+    repository: kong
+    tag: "3.4"
+  service:
+    type: LoadBalancer
+    port: 8000
+    adminPort: 8001
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: finsim.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+        - path: /api
+          pathType: Prefix
+          service: kong
+  tls: []
+
+# Dependencies
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: finsim123
+    username: finsim
+    password: finsim123
+    database: finsim
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+kafka:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 8Gi
+  zookeeper:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# Monitoring
+prometheus:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 9090
+
+grafana:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 3000
+  adminPassword: admin
+
+# Configuration
+config:
+  jwtSecretKey: "your-secret-key-change-in-production"
+  environment: "production"
+  logLevel: "info"
+
+# Security
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 2000
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

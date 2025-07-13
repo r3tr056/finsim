@@ -65,6 +65,10 @@ class TradeAgent(threading.Thread):
 				self.stop()
 
 	def make_decision(self):
-		raise NotImplementedError
+		"""
+		Base implementation that performs no action.
+		Override this method in subclasses to implement specific trading strategies.
+		"""
+		pass
 
 
