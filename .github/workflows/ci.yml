@@ -1,0 +1,268 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: docker.io
+  IMAGE_PREFIX: finsim
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [market-data, simulation-engine, agents, risk-analytics, portfolio, auth-service]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        cd services/${{ matrix.service }}
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov black flake8 mypy
+    
+    - name: Lint with flake8
+      run: |
+        cd services/${{ matrix.service }}
+        flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Format check with black
+      run: |
+        cd services/${{ matrix.service }}
+        black --check app
+    
+    - name: Type check with mypy
+      run: |
+        cd services/${{ matrix.service }}
+        mypy app --ignore-missing-imports
+    
+    - name: Test with pytest
+      run: |
+        cd services/${{ matrix.service }}
+        pytest tests/ --cov=app --cov-report=xml
+      continue-on-error: true
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: ui/dashboard/package-lock.json
+    
+    - name: Install dependencies
+      run: |
+        cd ui/dashboard
+        npm ci
+    
+    - name: Lint
+      run: |
+        cd ui/dashboard
+        npm run lint
+    
+    - name: Type check
+      run: |
+        cd ui/dashboard
+        npm run type-check
+    
+    - name: Build
+      run: |
+        cd ui/dashboard
+        npm run build
+
+  build-and-push:
+    needs: [lint-and-test, frontend-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    strategy:
+      matrix:
+        service: [market-data, simulation-engine, agents, risk-analytics, portfolio, auth-service, dashboard]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/${{ matrix.service }}
+        file: ./services/${{ matrix.service }}/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Build and push Dashboard image
+      if: matrix.service == 'dashboard'
+      uses: docker/build-push-action@v5
+      with:
+        context: ./ui/dashboard
+        file: ./ui/dashboard/Dockerfile
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/dashboard:latest
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  security-scan:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    strategy:
+      matrix:
+        service: [market-data, simulation-engine, agents, risk-analytics, portfolio, auth-service, dashboard]
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  deploy-to-staging:
+    needs: [build-and-push, security-scan]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: '1.28.0'
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+    
+    - name: Deploy to staging
+      run: |
+        helm upgrade --install finsim-staging ./helm/finsim \
+          --namespace finsim-staging \
+          --create-namespace \
+          --set global.environment=staging \
+          --set image.tag=latest \
+          --wait --timeout=10m
+
+  integration-tests:
+    needs: deploy-to-staging
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install test dependencies
+      run: |
+        pip install pytest requests websockets asyncio
+    
+    - name: Run integration tests
+      run: |
+        python -m pytest tests/integration/ -v --tb=short
+      env:
+        FINSIM_BASE_URL: https://finsim-staging.your-domain.com
+
+  deploy-to-production:
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: '1.28.0'
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > $HOME/.kube/config
+    
+    - name: Deploy to production
+      run: |
+        helm upgrade --install finsim ./helm/finsim \
+          --namespace finsim \
+          --create-namespace \
+          --set global.environment=production \
+          --set image.tag=latest \
+          --set config.jwtSecretKey="${{ secrets.JWT_SECRET_KEY }}" \
+          --wait --timeout=15m
+
+  notify:
+    needs: [deploy-to-production]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Notify deployment status
+      run: |
+        if [ "${{ needs.deploy-to-production.result }}" == "success" ]; then
+          echo "✅ FinSim deployed successfully to production!"
+        else
+          echo "❌ FinSim deployment failed!"
+        fi
