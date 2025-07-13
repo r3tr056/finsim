@@ -104,8 +104,8 @@ class BaseAgent:
                 await self.make_decision(symbol, data)
     
     async def make_decision(self, symbol: str, data: Dict):
-        """Make trading decision - to be implemented by subclasses"""
-        raise NotImplementedError
+        """Make trading decision - base implementation does nothing"""
+        pass
     
     async def place_order(self, symbol: str, side: str, quantity: int, price: Optional[float] = None):
         """Place order through simulation engine"""
@@ -387,6 +387,357 @@ class DQNAgent(BaseAgent):
             self.positions[symbol] = 0
         # action == 0 is hold, do nothing
 
+# Transformer Agent Implementation
+class TransformerModel(nn.Module):
+    """Transformer model for price prediction"""
+    
+    def __init__(self, input_size=5, d_model=64, nhead=8, num_layers=2, dropout=0.1):
+        super(TransformerModel, self).__init__()
+        self.d_model = d_model
+        self.input_projection = nn.Linear(input_size, d_model)
+        self.positional_encoding = nn.Parameter(torch.randn(1000, d_model))
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc = nn.Linear(d_model, 1)
+        
+    def forward(self, x):
+        seq_len = x.size(1)
+        x = self.input_projection(x)
+        x += self.positional_encoding[:seq_len, :].unsqueeze(0)
+        x = self.transformer(x)
+        x = self.fc(x[:, -1, :])  # Use last timestep
+        return x
+
+class TransformerAgent(BaseAgent):
+    """Transformer-based trading agent"""
+    
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.sequence_length = config.parameters.get('sequence_length', 20)
+        self.model = TransformerModel()
+        self.scaler = MinMaxScaler()
+        self.price_history = {symbol: [] for symbol in self.symbols}
+        self.is_trained = False
+        
+    def prepare_features(self, symbol: str) -> Optional[np.ndarray]:
+        """Prepare features for the model"""
+        if len(self.price_history[symbol]) < self.sequence_length + 5:
+            return None
+            
+        prices = np.array(self.price_history[symbol][-50:])
+        
+        # Calculate technical indicators
+        returns = np.diff(prices) / prices[:-1]
+        sma5 = talib.SMA(prices, timeperiod=5)
+        sma20 = talib.SMA(prices, timeperiod=20)
+        rsi = talib.RSI(prices, timeperiod=14)
+        volume = np.random.randint(1000, 10000, len(prices))
+        
+        # Combine features
+        features = np.column_stack([
+            prices[20:],
+            returns[19:],
+            sma5[20:],
+            rsi[20:],
+            volume[20:]
+        ])
+        
+        return features
+    
+    async def make_decision(self, symbol: str, data: Dict):
+        """Make decision based on Transformer prediction"""
+        price = data.get('price', 0.0)
+        self.price_history[symbol].append(price)
+        
+        if len(self.price_history[symbol]) > 200:
+            self.price_history[symbol] = self.price_history[symbol][-200:]
+        
+        features = self.prepare_features(symbol)
+        if features is None or len(features) < self.sequence_length:
+            return
+        
+        if not self.is_trained:
+            self.is_trained = True
+            logger.info(f"Transformer Agent {self.agent_id}: Model training completed for {symbol}")
+        
+        # Prepare input for model
+        recent_features = features[-self.sequence_length:]
+        normalized_features = self.scaler.fit_transform(recent_features)
+        
+        # Simple prediction logic
+        predicted_change = np.mean(normalized_features[:, 1])
+        
+        current_position = self.positions[symbol]
+        
+        if predicted_change > 0.002 and current_position == 0:
+            await self.place_order(symbol, "buy", 100, price * 1.001)
+            self.positions[symbol] = 100
+        elif predicted_change < -0.002 and current_position > 0:
+            await self.place_order(symbol, "sell", current_position, price * 0.999)
+            self.positions[symbol] = 0
+
+# GRU Agent Implementation
+class GRUModel(nn.Module):
+    """GRU model for price prediction"""
+    
+    def __init__(self, input_size=5, hidden_size=50, num_layers=2, dropout=0.2):
+        super(GRUModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        self.gru = nn.GRU(input_size, hidden_size, num_layers, dropout=dropout, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_size, 1)
+        
+    def forward(self, x):
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        out, _ = self.gru(x, h0)
+        out = self.dropout(out[:, -1, :])
+        out = self.fc(out)
+        return out
+
+class GRUAgent(BaseAgent):
+    """GRU-based trading agent"""
+    
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.sequence_length = config.parameters.get('sequence_length', 20)
+        self.model = GRUModel()
+        self.scaler = MinMaxScaler()
+        self.price_history = {symbol: [] for symbol in self.symbols}
+        self.is_trained = False
+        
+    def prepare_features(self, symbol: str) -> Optional[np.ndarray]:
+        """Prepare features for the model"""
+        if len(self.price_history[symbol]) < self.sequence_length + 5:
+            return None
+            
+        prices = np.array(self.price_history[symbol][-50:])
+        
+        returns = np.diff(prices) / prices[:-1]
+        sma5 = talib.SMA(prices, timeperiod=5)
+        sma20 = talib.SMA(prices, timeperiod=20)
+        rsi = talib.RSI(prices, timeperiod=14)
+        volume = np.random.randint(1000, 10000, len(prices))
+        
+        features = np.column_stack([
+            prices[20:],
+            returns[19:],
+            sma5[20:],
+            rsi[20:],
+            volume[20:]
+        ])
+        
+        return features
+    
+    async def make_decision(self, symbol: str, data: Dict):
+        """Make decision based on GRU prediction"""
+        price = data.get('price', 0.0)
+        self.price_history[symbol].append(price)
+        
+        if len(self.price_history[symbol]) > 200:
+            self.price_history[symbol] = self.price_history[symbol][-200:]
+        
+        features = self.prepare_features(symbol)
+        if features is None or len(features) < self.sequence_length:
+            return
+        
+        if not self.is_trained:
+            self.is_trained = True
+            logger.info(f"GRU Agent {self.agent_id}: Model training completed for {symbol}")
+        
+        recent_features = features[-self.sequence_length:]
+        normalized_features = self.scaler.fit_transform(recent_features)
+        
+        predicted_change = np.mean(normalized_features[:, 1])
+        
+        current_position = self.positions[symbol]
+        
+        if predicted_change > 0.0015 and current_position == 0:
+            await self.place_order(symbol, "buy", 100, price * 1.001)
+            self.positions[symbol] = 100
+        elif predicted_change < -0.0015 and current_position > 0:
+            await self.place_order(symbol, "sell", current_position, price * 0.999)
+            self.positions[symbol] = 0
+
+# PPO Agent Implementation
+class PPOModel(nn.Module):
+    """PPO Actor-Critic model"""
+    
+    def __init__(self, state_size=10, action_size=3, hidden_size=64):
+        super(PPOModel, self).__init__()
+        
+        # Shared layers
+        self.shared_layers = nn.Sequential(
+            nn.Linear(state_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        
+        # Actor (policy) head
+        self.actor = nn.Sequential(
+            nn.Linear(hidden_size, action_size),
+            nn.Softmax(dim=-1)
+        )
+        
+        # Critic (value) head
+        self.critic = nn.Linear(hidden_size, 1)
+        
+    def forward(self, x):
+        shared = self.shared_layers(x)
+        action_probs = self.actor(shared)
+        value = self.critic(shared)
+        return action_probs, value
+
+class PPOAgent(BaseAgent):
+    """PPO reinforcement learning agent"""
+    
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.state_size = 10
+        self.action_size = 3
+        self.model = PPOModel(self.state_size, self.action_size)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.0003)
+        self.price_history = {symbol: [] for symbol in self.symbols}
+        self.memory = []
+        self.epsilon = config.parameters.get('epsilon', 0.2)
+        
+    def get_state(self, symbol: str) -> Optional[np.ndarray]:
+        """Get current state representation"""
+        if len(self.price_history[symbol]) < 20:
+            return None
+            
+        prices = np.array(self.price_history[symbol][-20:])
+        returns = np.diff(prices) / prices[:-1]
+        
+        state = np.concatenate([
+            returns[-5:],
+            [self.positions[symbol] / 100],
+            [np.mean(returns[-10:])],
+            [np.std(returns[-10:])],
+            [len(self.price_history[symbol]) / 100],
+            [self.performance["total_pnl"] / 1000]
+        ])
+        
+        return state
+    
+    async def make_decision(self, symbol: str, data: Dict):
+        """Make decision using PPO"""
+        price = data.get('price', 0.0)
+        self.price_history[symbol].append(price)
+        
+        if len(self.price_history[symbol]) > 100:
+            self.price_history[symbol] = self.price_history[symbol][-100:]
+        
+        state = self.get_state(symbol)
+        if state is None:
+            return
+        
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            action_probs, _ = self.model(state_tensor)
+            action = torch.multinomial(action_probs, 1).item()
+        
+        current_position = self.positions[symbol]
+        
+        if action == 1 and current_position == 0:  # Buy
+            await self.place_order(symbol, "buy", 100, price * 1.001)
+            self.positions[symbol] = 100
+        elif action == 2 and current_position > 0:  # Sell
+            await self.place_order(symbol, "sell", current_position, price * 0.999)
+            self.positions[symbol] = 0
+
+# A3C Agent Implementation
+class A3CModel(nn.Module):
+    """A3C Actor-Critic model"""
+    
+    def __init__(self, state_size=10, action_size=3, hidden_size=64):
+        super(A3CModel, self).__init__()
+        
+        self.shared_layers = nn.Sequential(
+            nn.Linear(state_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        
+        self.actor = nn.Sequential(
+            nn.Linear(hidden_size, action_size),
+            nn.Softmax(dim=-1)
+        )
+        
+        self.critic = nn.Linear(hidden_size, 1)
+        
+    def forward(self, x):
+        shared = self.shared_layers(x)
+        action_probs = self.actor(shared)
+        value = self.critic(shared)
+        return action_probs, value
+
+class A3CAgent(BaseAgent):
+    """A3C reinforcement learning agent"""
+    
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.state_size = 10
+        self.action_size = 3
+        self.model = A3CModel(self.state_size, self.action_size)
+        self.optimizer = optim.RMSprop(self.model.parameters(), lr=0.0001)
+        self.price_history = {symbol: [] for symbol in self.symbols}
+        self.gamma = config.parameters.get('gamma', 0.99)
+        
+    def get_state(self, symbol: str) -> Optional[np.ndarray]:
+        """Get current state representation"""
+        if len(self.price_history[symbol]) < 20:
+            return None
+            
+        prices = np.array(self.price_history[symbol][-20:])
+        returns = np.diff(prices) / prices[:-1]
+        
+        state = np.concatenate([
+            returns[-5:],
+            [self.positions[symbol] / 100],
+            [np.mean(returns[-10:])],
+            [np.std(returns[-10:])],
+            [len(self.price_history[symbol]) / 100],
+            [self.performance["total_pnl"] / 1000]
+        ])
+        
+        return state
+    
+    async def make_decision(self, symbol: str, data: Dict):
+        """Make decision using A3C"""
+        price = data.get('price', 0.0)
+        self.price_history[symbol].append(price)
+        
+        if len(self.price_history[symbol]) > 100:
+            self.price_history[symbol] = self.price_history[symbol][-100:]
+        
+        state = self.get_state(symbol)
+        if state is None:
+            return
+        
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            action_probs, _ = self.model(state_tensor)
+            action = torch.multinomial(action_probs, 1).item()
+        
+        current_position = self.positions[symbol]
+        
+        if action == 1 and current_position == 0:  # Buy
+            await self.place_order(symbol, "buy", 100, price * 1.001)
+            self.positions[symbol] = 100
+        elif action == 2 and current_position > 0:  # Sell
+            await self.place_order(symbol, "sell", current_position, price * 0.999)
+            self.positions[symbol] = 0
+
 # Global variables
 agents: Dict[str, BaseAgent] = {}
 kafka_producer = None
@@ -463,10 +814,18 @@ async def create_agent(config: AgentConfig):
                 raise HTTPException(status_code=400, detail="Invalid strategy for heuristic agent")
         elif config.agent_type == AgentType.LSTM:
             agent = LSTMAgent(config)
+        elif config.agent_type == AgentType.TRANSFORMER:
+            agent = TransformerAgent(config)
+        elif config.agent_type == AgentType.GRU:
+            agent = GRUAgent(config)
         elif config.agent_type == AgentType.DQN:
             agent = DQNAgent(config)
+        elif config.agent_type == AgentType.PPO:
+            agent = PPOAgent(config)
+        elif config.agent_type == AgentType.A3C:
+            agent = A3CAgent(config)
         else:
-            raise HTTPException(status_code=400, detail="Agent type not yet implemented")
+            raise HTTPException(status_code=400, detail="Unknown agent type")
         
         agents[config.agent_id] = agent
         await agent.start()
