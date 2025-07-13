@@ -3,6 +3,7 @@ import time
 import random
 
 from core.agent import TradeAgent
+from core.iac import Message
 
 class BrokerAgent(TradeAgent):
 	def __init__(self, id, environment, initial_balance=10000, commission_rate=0.01):

@@ -4,6 +4,7 @@ initialize a Board by passing a tuple representing its size
 '''
 
 from typing import Tuple
+import copy
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,11 +12,13 @@ from matplotlib.figure import Figure
 from matplotlib.image import AxesImage
 from loguru import logger
 
-from .lifeforms.base import LifeForm
-
 # the channels
 N_CH = 1
 CHANNEL = range(N_CH)
+
+# Default constants
+DEF_R = 13
+KERNEL = ['KERNEL1', 'KERNEL2', 'KERNEL3']
 
 class World:
 	def __init__(self, size=(100, 100)):
@@ -26,27 +29,25 @@ class World:
 		self.param_P = 0
 		self.size = size
 		self.world_cells = [np.zeros(size, dtype=bool) for c in CHANNEL]
+		self.state = np.zeros(size, dtype=bool)  # Add state attribute
 
-	def add(self, evolving_sub: Evolver, loc: Tuple[int, int]):
+	def set_channels(self):
+		''' set up channels for the world '''
+		pass  # Implementation needed
+
+	def add(self, evolving_sub, loc: Tuple[int, int]):
 		''' add an evolving subject to the world '''
 		try:
-			h1, w1 = self.world_cells.shape
-			h1, w2 = evolving_sub.cells.shape
-			h, w = min(h1, h2), min(w1, w2)
-			i1, j1 = (w1 - w) // 2 + shift[1], (h1 - h) // 2 + shift[0]
-			i2, j2 = (w2 - w) // 2, (h2 - h) // 2
-			vmin = np.amin(evolving_sub.cells)
-
-			for y in range(h):
-				for x in range(w):
-					if evolving_sub.cells[j2 + y, i2 + x] > vmin:
-						self.cells[(j1 + y) % h1, ]
-
-			self.state[row: row + height, col: col + width] = evolving_sub.layout
-		except ValueError:
-			logger.error("Subject being added is out of world bounds")
+			# Simplified implementation to fix syntax errors
+			row, col = loc
+			if hasattr(evolving_sub, 'layout'):
+				height, width = evolving_sub.layout.shape
+				self.state[row: row + height, col: col + width] = evolving_sub.layout
+		except (ValueError, AttributeError) as e:
+			logger.error(f"Subject being added is out of world bounds: {e}")
 			raise
 
+	@classmethod
 	def create_from_values(cls, world_cells, params=None, names=None):
 		self = cls()
 		self.names = names.copy() if names is not None else None
@@ -63,20 +64,30 @@ class World:
 		if params is not None:
 			if type(params) not in [list]:
 				params = [params for K in KERNEL]
-			self.params = [WorldUtils.data_to_params(p) for p in params]
+			self.params = [self.data_to_params(p) for p in params]
 			self.set_channels()
 		self.world_cells = None
 		rle = data.get('world_cells')
 		if rle is not None:
 			if type(rle) not in [list]:
 				rle = [rle for c in CHANNEL]
-			self.world_cells = [WorldUtils.rle_2_cells(r) for r in rle]
+			self.world_cells = [self.rle_2_cells(r) for r in rle]
 		return self
+
+	def data_to_params(self, data):
+		''' Convert data to parameters '''
+		return data  # Simplified implementation
+
+	def rle_2_cells(self, rle):
+		''' Convert RLE to cells '''
+		return np.zeros(self.size, dtype=bool)  # Simplified implementation
 
 	def clear(self):
 		''' clear the world, reset everything '''
 		logger.debug("World has be cleared and reset")
-		self.world_cells.fill(0)
+		self.state.fill(0)
+		for cells in self.world_cells:
+			cells.fill(0)
 
 	def view(self, figsize=(5, 5)) -> Tuple[Figure, AxesImage]:
 		''' view the current state of the world '''
@@ -88,5 +99,7 @@ class World:
 
 	@staticmethod
 	def rle_to_world_cells(st):
-		stacks = 
+		''' Convert RLE string to world cells '''
+		# Simplified implementation - needs proper RLE decoding
+		return np.zeros((100, 100), dtype=bool)
 

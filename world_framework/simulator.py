@@ -16,10 +16,10 @@ class Simulator:
 	def __init__(self, environment: Environment, instruments_config):
 		self.environment = environment
 		self.queue = Queue()  # queue for communication between the processes
-		# self.visualizer = RealTimeVisualizer(self.queue, instruments_config)
-		# self.vis_interval = 1  # update every second
-		# self.last_visualization_time = time.time()
-		# self.visualizer_process = Process(target=self.visualizer.run)
+		self.visualizer = RealTimeVisualizer(self.queue, instruments_config)
+		self.vis_interval = 1  # update every second
+		self.last_visualization_time = time.time()
+		self.visualizer_process = Process(target=self.visualizer.run)
 		self.agents_threads = []
 
 	def start_visualizer(self):
@@ -45,19 +45,19 @@ class Simulator:
 			agent.start()
 			self.agents_threads.append(agent)
 
-		# self.start_visualizer()
+		self.start_visualizer()
 
 		start_time = time.time()
 		try:
 			while time.time() - start_time < duration:
 				# update instrument prices
-				while self.environment._lock:
+				with self.environment._lock:
 					for instrument in self.environment.instruments.values():
 						instrument.update_prices()
 
 				# publish market update
 				self.environment.update_market()
-				# self.update_visualizer()
+				self.update_visualizer()
 				time.sleep(self.environment.tick_duration)
 		except KeyboardInterrupt:
 			print("Simulation interrupted.")
@@ -70,10 +70,11 @@ class Simulator:
 			for thread in self.agents_threads:
 				thread.join()
 
-			# if self.visualizer_process.is_alive():
-			# 	self.visualizer_process.terminate()
-			# 	self.visualizer_process.join()
-			# self.queue.close()
+			if self.visualizer_process.is_alive():
+				self.visualizer.stop()
+				self.visualizer_process.terminate()
+				self.visualizer_process.join()
+			self.queue.close()
 
 # Main simulation setup
 if __name__ == "__main__":
